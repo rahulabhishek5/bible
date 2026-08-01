@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
-import { BookOpen, Search, Menu, ChevronRight, BookOpenCheck, Globe, HelpCircle, Settings, X, Type, ChevronDown, Copy, Check } from 'lucide-react';
+import { BookOpen, Search, Menu, ChevronRight, BookOpenCheck, Globe, HelpCircle, Settings, X, Type, ChevronDown } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api/bible';
 
@@ -83,7 +83,6 @@ export default function App() {
   // Content Display States
   const [chapterVerses, setChapterVerses] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [copiedVerseId, setCopiedVerseId] = useState(null);
   
   // Advanced Search Engine States
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,17 +92,31 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('reader'); // reader, search
   const [isViewModeDropdownOpen, setIsViewModeDropdownOpen] = useState(false);
 
-  const handleCopyVerse = (verse) => {
-    const bookName = selectedBook?.name || '';
-    const chapter = selectedChapter;
-    const textToCopy = viewMode === 'single_english' ? verse.translations?.KJV : (verse.translations?.[selectedLanguage] || verse.translations?.KJV);
-    const citation = `${bookName} ${chapter}:${verse.verseNumber}\n[${verse.verseNumber}] ${textToCopy}`;
-    
-    navigator.clipboard.writeText(citation).then(() => {
-      setCopiedVerseId(verse.verseNumber);
-      setTimeout(() => setCopiedVerseId(null), 1500);
-    });
-  };
+  const handleNativeCopy = useCallback((e) => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+
+    const range = selection.getRangeAt(0);
+    const verses = document.querySelectorAll('[data-verse]');
+    const selectedVerseNodes = Array.from(verses).filter(el => range.intersectsNode(el));
+
+    if (selectedVerseNodes.length === 0) return;
+
+    e.preventDefault();
+
+    const bookName = selectedVerseNodes[0].getAttribute('data-book-name');
+    const chapter = selectedVerseNodes[0].getAttribute('data-chapter');
+    const startVerse = selectedVerseNodes[0].getAttribute('data-verse');
+    const endVerse = selectedVerseNodes[selectedVerseNodes.length - 1].getAttribute('data-verse');
+    const verseRange = startVerse === endVerse ? startVerse : `${startVerse}-${endVerse}`;
+
+    const selectedText = selection.toString().trim();
+    const formattedText = `${bookName} ${chapter}:${verseRange}\n[${verseRange}] ${selectedText}`;
+
+    if (e.clipboardData) {
+      e.clipboardData.setData('text/plain', formattedText);
+    }
+  }, []);
 
   const highlightText = useCallback((text, query) => {
     if (!query || !text) return text;
@@ -474,7 +487,10 @@ export default function App() {
         {/* CONTAINER DISPLAY WINDOW */}
         <div className="flex-1 p-2 md:p-8 overflow-hidden flex flex-col">
           {activeTab === 'reader' ? (
-            <div className="max-w-5xl w-full mx-auto bg-surface-white border-2 md:border-4 border-primary shadow-[4px_4px_0px_0px_#1A1A1A] md:shadow-[8px_8px_0px_0px_#1A1A1A] min-h-0 flex flex-col h-full overflow-hidden">
+            <div 
+              onCopy={handleNativeCopy}
+              className="max-w-5xl w-full mx-auto bg-surface-white border-2 md:border-4 border-primary shadow-[4px_4px_0px_0px_#1A1A1A] md:shadow-[8px_8px_0px_0px_#1A1A1A] min-h-0 flex flex-col h-full overflow-hidden"
+            >
               {selectedBook ? (
                 <>
                   {/* INTERACTIVE CONTROL HEADER / QUICK-NAV TRIGGER */}
@@ -521,16 +537,16 @@ export default function App() {
                       </div>
                     ) : (
                       chapterVerses.map((v) => (
-                        <div key={v._id} id={`verse-${v.verseNumber}`} className="group flex items-start gap-4 p-4 border-2 border-primary bg-surface-white transition-all duration-100 ease-out md:hover:shadow-[6px_6px_0px_0px_#1A1A1A] md:hover:translate-x-[-2px] md:hover:translate-y-[-2px]">
+                        <div 
+                          key={v._id} 
+                          id={`verse-${v.verseNumber}`} 
+                          data-book-name={selectedBook?.name}
+                          data-chapter={selectedChapter}
+                          data-verse={v.verseNumber}
+                          className="group flex items-start gap-4 p-4 border-2 border-primary bg-surface-white transition-all duration-100 ease-out md:hover:shadow-[6px_6px_0px_0px_#1A1A1A] md:hover:translate-x-[-2px] md:hover:translate-y-[-2px]"
+                        >
                           <div className="flex flex-col items-center gap-2 mt-1 shrink-0">
-                            <span className="text-sm font-bold text-surface-white bg-primary px-3 py-1.5">{v.verseNumber}</span>
-                            <button 
-                              onClick={() => handleCopyVerse(v)}
-                              className="p-1.5 text-primary border-2 border-transparent hover:border-primary hover:bg-cream transition-all rounded active:scale-95"
-                              title="Copy Verse"
-                            >
-                              {copiedVerseId === v.verseNumber ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />}
-                            </button>
+                            <span className="text-sm font-bold text-surface-white bg-primary px-3 py-1.5 select-none">{v.verseNumber}</span>
                           </div>
                           <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-8 transition-none script-container-lock">
                             {/* DYNAMIC LAYOUT CONTROL RENDERING */}
