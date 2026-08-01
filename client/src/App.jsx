@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react';
-import { BookOpen, Search, Menu, ChevronRight, BookOpenCheck, Globe, HelpCircle, Settings, X, Type, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { BookOpen, Search, Menu, ChevronRight, BookOpenCheck, Globe, HelpCircle, Settings, X, Type, ChevronDown, Copy, Check } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api/bible';
 
@@ -19,9 +19,9 @@ const ENGLISH_BOOK_NAMES = [
 // DYNAMIC THEMING DEFINITIONS
 // ============================================================================
 const THEMES = {
-  geometry: { primary: '#1A1A1A', cream: '#F5F5DC', surface: '#FFFFFF', name: 'Sacred Geometry' },
-  obsidian: { primary: '#FFFFFF', cream: '#121212', surface: '#1A1A1A', name: 'Obsidian Dark' },
-  parchment: { primary: '#3E2723', cream: '#F5E6D3', surface: '#FFF8E7', name: 'Warm Parchment' }
+  geometry: { primary: '#1A1A1A', cream: '#F5F5DC', surface: '#FFFFFF', name: 'Grace Theme' },
+  obsidian: { primary: '#FFFFFF', cream: '#121212', surface: '#1A1A1A', name: 'Dark Theme' },
+  parchment: { primary: '#3E2723', cream: '#F5E6D3', surface: '#FFF8E7', name: 'Sepia Theme' }
 };
 const ACCENTS = ['#FF3B30', '#007AFF', '#34C759', '#FFCC00', '#FF2D55'];
 
@@ -49,6 +49,29 @@ export default function App() {
   const [selectedLanguage, setSelectedLanguage] = useState('TELUGU');
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
 
+  const viewModeRef = useRef(null);
+  const langRef = useRef(null);
+  const quickNavRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (viewModeRef.current && !viewModeRef.current.contains(event.target)) {
+        setIsViewModeDropdownOpen(false);
+      }
+      if (langRef.current && !langRef.current.contains(event.target)) {
+        setIsLangDropdownOpen(false);
+      }
+      if (quickNavRef.current && !quickNavRef.current.contains(event.target)) {
+        setIsQuickNavOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   const scrollToVerse = (verseNum) => {
     setIsQuickNavOpen(false);
     const el = document.getElementById(`verse-${verseNum}`);
@@ -60,6 +83,7 @@ export default function App() {
   // Content Display States
   const [chapterVerses, setChapterVerses] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [copiedVerseId, setCopiedVerseId] = useState(null);
   
   // Advanced Search Engine States
   const [searchQuery, setSearchQuery] = useState('');
@@ -69,16 +93,30 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('reader'); // reader, search
   const [isViewModeDropdownOpen, setIsViewModeDropdownOpen] = useState(false);
 
-  const highlightText = (text, query) => {
-    if (!query || !text) return text;
-    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escapedQuery})`, 'gi');
-    const parts = text.split(regex);
-    return parts.map((part, i) => 
-      regex.test(part) ? 
-        <span key={i} className="bg-primary text-surface-white px-1 mx-0.5 font-black">{part}</span> : part
-    );
+  const handleCopyVerse = (verse) => {
+    const bookName = selectedBook?.name || '';
+    const chapter = selectedChapter;
+    const textToCopy = viewMode === 'single_english' ? verse.translations?.KJV : (verse.translations?.[selectedLanguage] || verse.translations?.KJV);
+    const citation = `${bookName} ${chapter}:${verse.verseNumber}\n[${verse.verseNumber}] ${textToCopy}`;
+    
+    navigator.clipboard.writeText(citation).then(() => {
+      setCopiedVerseId(verse.verseNumber);
+      setTimeout(() => setCopiedVerseId(null), 1500);
+    });
   };
+
+  const highlightText = useCallback((text, query) => {
+    if (!query || !text) return text;
+    const nText = text.normalize('NFC');
+    const nQuery = query.normalize('NFC');
+    const escapedQuery = nQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?<=^|[^\\p{L}\\p{M}\\d])(${escapedQuery})(?=[^\\p{L}\\p{M}\\d]|$)`, 'giu');
+    const parts = nText.split(regex);
+    return parts.map((part, i) => {
+      return (i % 2 === 1 && part) ? 
+        <mark key={i} className="bg-primary text-surface-white px-1 mx-0.5 font-black">{part}</mark> : part;
+    });
+  }, []);
 
   // ============================================================================
   // VIEW MODE STATE SYNCHRONIZATION
@@ -142,13 +180,14 @@ export default function App() {
   }, [selectedBook, selectedChapter]);
 
   // Phase 3: Execute Target Search Form Logic
-  const handleSearch = (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-
+  const performSearch = useCallback((query, translation) => {
+    if (!query.trim()) {
+      setSearchResults(null);
+      return;
+    }
     setSearching(true);
-    let url = `${API_BASE}/search?q=${encodeURIComponent(searchQuery)}`;
-    if (searchTranslation) url += `&translation=${searchTranslation}`;
+    let url = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
+    if (translation) url += `&translation=${translation}`;
 
     fetch(url)
       .then(res => res.json())
@@ -162,7 +201,25 @@ export default function App() {
         console.error("Search execution error:", err);
         setSearching(false);
       });
+  }, []);
+
+  const handleSearch = (e) => {
+    if (e) e.preventDefault();
+    performSearch(searchQuery, searchTranslation);
   };
+
+  useEffect(() => {
+    if (activeTab === 'search') {
+      const timer = setTimeout(() => {
+        if (searchQuery.trim()) {
+          performSearch(searchQuery, searchTranslation);
+        } else {
+          setSearchResults(null);
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [searchQuery, searchTranslation, activeTab, performSearch]);
 
   const jumpToChapter = (bookNum, chapNum) => {
     const targetBook = menuData.find(b => b.bookNumber === bookNum);
@@ -185,13 +242,13 @@ export default function App() {
         <div className="fixed inset-0 bg-primary/80 z-[100] flex items-center justify-center p-4">
           <div className="w-[92vw] md:w-[450px] max-h-[90vh] overflow-y-auto bg-surface-white border-4 border-primary shadow-[8px_8px_0px_0px_#1A1A1A] flex flex-col transition-all">
             <div className="p-5 border-b-4 border-primary flex justify-between items-center bg-cream shrink-0">
-               <h2 className="font-extrabold text-2xl uppercase tracking-widest text-primary flex items-center gap-2"><Settings className="w-6 h-6"/> Ergonomics</h2>
+               <h2 className="font-extrabold text-2xl uppercase tracking-widest text-primary flex items-center gap-2"><Settings className="w-6 h-6"/> Settings</h2>
                <button onClick={() => setIsSettingsOpen(false)} className="p-2 border-2 border-primary hover:bg-surface-white transition-all active:scale-95 active:translate-y-[1px]"><X className="w-5 h-5 text-primary"/></button>
             </div>
             <div className="p-6 space-y-8 flex-1 overflow-y-auto">
                {/* THEMES */}
                <div>
-                 <h3 className="font-bold text-lg uppercase tracking-wider text-primary mb-3">Structural Theme</h3>
+                 <h3 className="font-bold text-lg uppercase tracking-wider text-primary mb-3">Bible Theme</h3>
                  <div className="space-y-3">
                    {Object.entries(THEMES).map(([key, t]) => (
                      <button 
@@ -227,13 +284,12 @@ export default function App() {
 
                {/* TYPOGRAPHY SCALE */}
                <div>
-                 <h3 className="font-bold text-lg uppercase tracking-wider text-primary mb-3">Global Typography</h3>
-                 <div className="flex border-2 border-primary bg-cream">
-                   <button onClick={() => setSettings({...settings, fontScale: Math.max(0.85, settings.fontScale - 0.15)})} className="p-4 border-r-2 border-primary hover:bg-surface-white active:bg-primary active:text-surface-white transition-colors text-primary min-w-[64px] flex justify-center items-center"><Type className="w-4 h-4"/></button>
-                   <div className="flex-1 flex items-center justify-center font-extrabold text-primary tracking-widest">{Math.round(settings.fontScale * 100)}%</div>
-                   <button onClick={() => setSettings({...settings, fontScale: Math.min(1.45, settings.fontScale + 0.15)})} className="p-4 border-l-2 border-primary hover:bg-surface-white active:bg-primary active:text-surface-white transition-colors text-primary min-w-[64px] flex justify-center items-center"><Type className="w-6 h-6"/></button>
+                 <h3 className="font-bold text-lg uppercase tracking-wider text-primary mb-3">Change Font</h3>
+                 <div className="grid grid-cols-3 border-2 border-primary bg-cream">
+                   <button aria-label="Decrease font size" onClick={() => setSettings({...settings, fontScale: Math.max(0.85, settings.fontScale - 0.15)})} className="p-4 border-r-2 border-primary hover:bg-surface-white focus:outline-none focus:ring-4 focus:ring-accent-red active:bg-primary active:text-surface-white transition-colors text-primary flex justify-center items-center font-extrabold text-3xl min-h-[44px] min-w-[44px]">-</button>
+                   <div className="flex items-center justify-center font-extrabold text-primary tracking-widest border-r-2 border-primary text-base md:text-lg">{Math.round(settings.fontScale * 100)}%</div>
+                   <button aria-label="Increase font size" onClick={() => setSettings({...settings, fontScale: Math.min(1.45, settings.fontScale + 0.15)})} className="p-4 hover:bg-surface-white focus:outline-none focus:ring-4 focus:ring-accent-red active:bg-primary active:text-surface-white transition-colors text-primary flex justify-center items-center font-extrabold text-3xl min-h-[44px] min-w-[44px]">+</button>
                  </div>
-                 <p className="mt-3 text-xs font-bold text-primary/60 uppercase tracking-wider">Multi-script proportions are automatically protected during scaling.</p>
                </div>
             </div>
           </div>
@@ -252,7 +308,7 @@ export default function App() {
       <aside className={`fixed inset-y-0 left-0 z-[100] transform transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 w-80 h-full bg-cream border-r-4 border-primary flex flex-col overflow-hidden`}>
         <div className="p-5 border-b-4 border-primary flex items-center gap-3 bg-primary text-surface-white shrink-0">
           <BookOpenCheck className="h-7 w-7 shrink-0" />
-          <h1 className="font-bold text-xl tracking-wide whitespace-nowrap uppercase">Multi-Lingual Bible</h1>
+          <h1 className="font-bold text-xl tracking-wide whitespace-nowrap uppercase">Sinai Bible</h1>
         </div>
 
         {/* Binary Segmentation Toggle */}
@@ -339,9 +395,13 @@ export default function App() {
 
             <div className="flex items-center gap-2 justify-between w-full sm:w-auto mt-1 sm:mt-0">
                {activeTab === 'reader' && selectedBook && (
-                  <div className="relative flex-1 sm:flex-none">
+                  <div ref={viewModeRef} className="relative flex-1 sm:flex-none">
                     <button 
-                      onClick={() => setIsViewModeDropdownOpen(!isViewModeDropdownOpen)}
+                      onClick={() => {
+                        setIsLangDropdownOpen(false);
+                        setIsQuickNavOpen(false);
+                        setIsViewModeDropdownOpen(!isViewModeDropdownOpen);
+                      }}
                       className="flex w-full sm:w-56 items-center justify-between gap-1.5 md:gap-3 bg-surface-white border-2 border-primary px-2 py-1.5 md:px-4 md:py-3 transition-all duration-300 ease-out active:scale-[0.98] md:hover:shadow-[4px_4px_0px_0px_#1A1A1A] md:hover:-translate-y-1 md:hover:-translate-x-1 cursor-pointer min-h-[40px]"
                     >
                       <div className="flex items-center gap-2">
@@ -360,7 +420,7 @@ export default function App() {
                           onClick={() => { setViewMode(mode); setIsViewModeDropdownOpen(false); }}
                           className={`px-4 py-4 text-left font-bold uppercase tracking-wider text-sm transition-colors md:hover:bg-cream ${viewMode === mode ? 'bg-primary text-surface-white md:hover:bg-primary' : 'text-primary'}`}
                         >
-                          {mode === 'parallel' ? 'Parallel View' : mode === 'single_english' ? 'English Only' : 'Regional Only'}
+                          {mode === 'parallel' ? 'Eng & Tel' : mode === 'single_english' ? 'English Only' : 'Regional Only'}
                         </button>
                       ))}
                     </div>
@@ -369,9 +429,13 @@ export default function App() {
                 
               {/* Global Language Selector Dropdown */}
               {viewMode !== 'single_english' && (
-                <div className="relative">
+                <div ref={langRef} className="relative">
                   <button 
-                    onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
+                    onClick={() => {
+                      setIsViewModeDropdownOpen(false);
+                      setIsQuickNavOpen(false);
+                      setIsLangDropdownOpen(!isLangDropdownOpen);
+                    }}
                     className="p-2 px-3 md:px-4 bg-surface-white border-2 border-primary text-primary transition-all duration-100 ease-out active:scale-[0.98] active:translate-y-[0.5px] md:hover:shadow-[4px_4px_0px_0px_#1A1A1A] md:hover:-translate-y-1 md:hover:-translate-x-1 min-h-[40px] flex items-center justify-center gap-2 font-bold text-xs md:text-sm"
                   >
                     <Globe className="w-4 h-4 md:w-5 md:h-5"/>
@@ -414,9 +478,13 @@ export default function App() {
               {selectedBook ? (
                 <>
                   {/* INTERACTIVE CONTROL HEADER / QUICK-NAV TRIGGER */}
-                  <div className="border-b-2 md:border-b-4 border-primary shrink-0 flex flex-col relative z-20 bg-cream">
+                  <div ref={quickNavRef} className="border-b-2 md:border-b-4 border-primary shrink-0 flex flex-col relative z-20 bg-cream">
                     <button 
-                      onClick={() => setIsQuickNavOpen(!isQuickNavOpen)}
+                      onClick={() => {
+                        setIsViewModeDropdownOpen(false);
+                        setIsLangDropdownOpen(false);
+                        setIsQuickNavOpen(!isQuickNavOpen);
+                      }}
                       className="p-3 md:p-8 text-center w-full transition-all md:hover:bg-primary md:hover:text-surface-white group cursor-pointer focus:outline-none"
                     >
                       <div className="flex items-center justify-center gap-2">
@@ -453,8 +521,17 @@ export default function App() {
                       </div>
                     ) : (
                       chapterVerses.map((v) => (
-                        <div key={v._id} id={`verse-${v.verseNumber}`} className="flex items-start gap-4 p-4 border-2 border-primary bg-surface-white transition-all duration-100 ease-out md:hover:shadow-[6px_6px_0px_0px_#1A1A1A] md:hover:translate-x-[-2px] md:hover:translate-y-[-2px]">
-                          <span className="text-sm font-bold text-surface-white bg-primary px-3 py-1.5 mt-1 shrink-0">{v.verseNumber}</span>
+                        <div key={v._id} id={`verse-${v.verseNumber}`} className="group flex items-start gap-4 p-4 border-2 border-primary bg-surface-white transition-all duration-100 ease-out md:hover:shadow-[6px_6px_0px_0px_#1A1A1A] md:hover:translate-x-[-2px] md:hover:translate-y-[-2px]">
+                          <div className="flex flex-col items-center gap-2 mt-1 shrink-0">
+                            <span className="text-sm font-bold text-surface-white bg-primary px-3 py-1.5">{v.verseNumber}</span>
+                            <button 
+                              onClick={() => handleCopyVerse(v)}
+                              className="p-1.5 text-primary border-2 border-transparent hover:border-primary hover:bg-cream transition-all rounded active:scale-95"
+                              title="Copy Verse"
+                            >
+                              {copiedVerseId === v.verseNumber ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />}
+                            </button>
+                          </div>
                           <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-8 transition-none script-container-lock">
                             {/* DYNAMIC LAYOUT CONTROL RENDERING */}
                             {(viewMode === 'parallel' || viewMode === 'single_english') && (
@@ -521,7 +598,7 @@ export default function App() {
                 ) : searchResults ? (
                   <>
                     <div className="border-b-4 border-primary pb-4 mb-4">
-                      <p className="text-xl font-extrabold text-primary tracking-widest uppercase">Query Matches: {searchResults.length}</p>
+                      <p className="text-xl font-extrabold text-primary tracking-widest uppercase">Total Matches: {searchResults.length}</p>
                     </div>
                     {searchResults.map((result) => (
                       <div
@@ -534,7 +611,7 @@ export default function App() {
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <span className="text-lg font-extrabold text-primary md:group-hover:text-accent-red uppercase tracking-wider">
-                            Book {result.bookNumber} — {result.chapterNumber}:{result.verseNumber}
+                            {(menuData.find(b => b.bookNumber === result.bookNumber)?.name) || `Book ${result.bookNumber}`} {result.chapterNumber}:{result.verseNumber}
                           </span>
                           <span className="text-sm text-surface-white bg-primary px-3 py-1.5 font-bold uppercase tracking-widest border-2 border-primary md:group-hover:bg-accent-red transition-colors inline-block w-fit">JUMP →</span>
                         </div>

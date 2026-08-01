@@ -152,65 +152,79 @@ router.get('/navigation-menu', (req, res) => {
 // ROUTE 2: GET /api/bible/search?q=query&translation=TELUGU
 // ============================================================
 router.get('/search', (req, res) => {
-  const q = req.query.q;
-  let translation = (req.query.translation || 'KJV').toUpperCase();
+  const rawQ = req.query.q;
+  let translation = (req.query.translation || '').toUpperCase();
   if (translation === 'ENGLISH') translation = 'KJV';
 
-  if (!q) {
+  if (!rawQ || !rawQ.trim()) {
     return res.status(400).json({ status: 'error', message: 'Query parameter "q" is required' });
   }
 
-  const targetLang = dbs[translation] ? translation : 'KJV';
-  const db = dbs[targetLang];
-  const schema = schemaInfo[targetLang];
+  const q = rawQ.trim().normalize('NFC');
 
-  if (!db || !schema) {
-     return res.status(500).json({ status: 'error', message: 'Database not loaded' });
-  }
+  // Determine target DBs: If specified and exists, search that DB; otherwise search ALL loaded DBs!
+  const targetLangs = (translation && dbs[translation]) 
+    ? [translation] 
+    : Object.keys(dbs);
+
+  const matchedCoordinates = new Set();
+  const zippedResults = [];
 
   try {
-    const stmt = db.prepare(`SELECT * FROM verses WHERE ${schema.textCol} LIKE ? LIMIT 50`);
-    const rows = stmt.all(`%${q}%`);
-    
-    const reverseBookMap = {};
-    for (const [k, v] of Object.entries(bookMaps[targetLang])) {
-       reverseBookMap[v] = parseInt(k, 10);
-    }
+    for (const langKey of targetLangs) {
+      const db = dbs[langKey];
+      const schema = schemaInfo[langKey];
+      if (!db || !schema) continue;
 
-    const zippedResults = [];
-    
-    for (const row of rows) {
-      const bName = row[schema.bookCol];
-      const bInt = reverseBookMap[bName] || 1;
-      const cInt = parseInt(row[schema.chapCol], 10);
-      const vInt = parseInt(row[schema.verseCol], 10);
-
-      const zippedTrans = {
-         KJV: 'Text Unavailable',
-         TELUGU: 'Text Unavailable',
-         HINDI: 'Text Unavailable'
-      };
-      
-      // Parallel DB Coordinate Zipping
-      for (const [lKey, lDb] of Object.entries(dbs)) {
-         const lSchema = schemaInfo[lKey];
-         const lInternalBook = bookMaps[lKey][bInt];
-         if (!lSchema || !lInternalBook) continue;
-
-         try {
-           const vStmt = lDb.prepare(`SELECT ${lSchema.textCol} AS t FROM verses WHERE ${lSchema.bookCol} = ? AND ${lSchema.chapCol} = ? AND ${lSchema.verseCol} = ?`);
-           const vRow = vStmt.get(lInternalBook, cInt, vInt);
-           if (vRow) zippedTrans[lKey] = vRow.t;
-         } catch(e) {}
+      const reverseBookMap = {};
+      for (const [k, v] of Object.entries(bookMaps[langKey])) {
+        reverseBookMap[v] = parseInt(k, 10);
       }
 
-      zippedResults.push({
-         _id: `sqlite_${bInt}_${cInt}_${vInt}`,
-         bookNumber: bInt,
-         chapterNumber: cInt,
-         verseNumber: vInt,
-         translations: zippedTrans
-      });
+      const stmt = db.prepare(`SELECT * FROM verses WHERE ${schema.textCol} LIKE ? LIMIT 50`);
+      const rows = stmt.all(`%${q}%`);
+
+      for (const row of rows) {
+        const bName = row[schema.bookCol];
+        const bInt = reverseBookMap[bName] || 1;
+        const cInt = parseInt(row[schema.chapCol], 10);
+        const vInt = parseInt(row[schema.verseCol], 10);
+
+        const coordKey = `${bInt}_${cInt}_${vInt}`;
+        if (matchedCoordinates.has(coordKey)) continue;
+        matchedCoordinates.add(coordKey);
+
+        const zippedTrans = {
+          KJV: 'Text Unavailable',
+          TELUGU: 'Text Unavailable',
+          HINDI: 'Text Unavailable'
+        };
+
+        // Parallel DB Coordinate Zipping
+        for (const [lKey, lDb] of Object.entries(dbs)) {
+          const lSchema = schemaInfo[lKey];
+          const lInternalBook = bookMaps[lKey][bInt];
+          if (!lSchema || !lInternalBook) continue;
+
+          try {
+            const vStmt = lDb.prepare(`SELECT ${lSchema.textCol} AS t FROM verses WHERE ${lSchema.bookCol} = ? AND ${lSchema.chapCol} = ? AND ${lSchema.verseCol} = ?`);
+            const vRow = vStmt.get(lInternalBook, cInt, vInt);
+            if (vRow) zippedTrans[lKey] = vRow.t;
+          } catch(e) {}
+        }
+
+        zippedResults.push({
+          _id: `sqlite_${bInt}_${cInt}_${vInt}`,
+          bookNumber: bInt,
+          chapterNumber: cInt,
+          verseNumber: vInt,
+          translations: zippedTrans
+        });
+
+        if (zippedResults.length >= 50) break;
+      }
+
+      if (zippedResults.length >= 50) break;
     }
 
     res.status(200).json({
