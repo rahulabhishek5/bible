@@ -33,6 +33,23 @@ const getInitialSettings = () => {
   return { theme: 'geometry', accent: '#FF3B30', fontScale: 1.0 };
 };
 
+const buildVerseCitation = ({ rawText, regBookName, enBookName, chapter, startVerse, endVerse, hasEnglish, hasRegional }) => {
+  const verseRange = startVerse === endVerse ? startVerse : `${startVerse}-${endVerse}`;
+
+  let bookCitation = '';
+  if (hasEnglish && !hasRegional) {
+    bookCitation = enBookName;
+  } else if (!regBookName || regBookName === enBookName) {
+    bookCitation = enBookName || regBookName;
+  } else {
+    bookCitation = `${regBookName} (${enBookName})`;
+  }
+
+  const cleanedText = rawText.replace(/\[\d+(?:-\d+)?\]/g, '').trim();
+
+  return `"${cleanedText}" - *${bookCitation} ${chapter}:${verseRange}*`;
+};
+
 export default function App() {
   // Navigation & UI Layout State
   const [menuData, setMenuData] = useState([]);
@@ -104,14 +121,37 @@ export default function App() {
 
     e.preventDefault();
 
-    const bookName = selectedVerseNodes[0].getAttribute('data-book-name');
-    const chapter = selectedVerseNodes[0].getAttribute('data-chapter');
-    const startVerse = selectedVerseNodes[0].getAttribute('data-verse');
+    const startVerseNode = selectedVerseNodes[0];
+    const enBookName = startVerseNode.getAttribute('data-book-name-en') || '';
+    const regBookName = startVerseNode.getAttribute('data-book-name-reg') || enBookName;
+    const chapter = startVerseNode.getAttribute('data-chapter');
+    const startVerse = startVerseNode.getAttribute('data-verse');
     const endVerse = selectedVerseNodes[selectedVerseNodes.length - 1].getAttribute('data-verse');
-    const verseRange = startVerse === endVerse ? startVerse : `${startVerse}-${endVerse}`;
 
-    const selectedText = selection.toString().trim();
-    const formattedText = `${bookName} ${chapter}:${verseRange}\n[${verseRange}] ${selectedText}`;
+    const englishContainers = document.querySelectorAll('[data-language="ENGLISH"]');
+    const regionalContainers = document.querySelectorAll('[data-language="REGIONAL"]');
+    
+    let hasEnglish = false;
+    let hasRegional = false;
+    
+    englishContainers.forEach(el => {
+      if (range.intersectsNode(el)) hasEnglish = true;
+    });
+    regionalContainers.forEach(el => {
+      if (range.intersectsNode(el)) hasRegional = true;
+    });
+
+    const rawText = selection.toString();
+    const formattedText = buildVerseCitation({
+      rawText,
+      regBookName,
+      enBookName,
+      chapter,
+      startVerse,
+      endVerse,
+      hasEnglish,
+      hasRegional
+    });
 
     if (e.clipboardData) {
       e.clipboardData.setData('text/plain', formattedText);
@@ -540,7 +580,8 @@ export default function App() {
                         <div 
                           key={v._id} 
                           id={`verse-${v.verseNumber}`} 
-                          data-book-name={selectedBook?.name}
+                          data-book-name-en={ENGLISH_BOOK_NAMES[selectedBook?.bookNumber - 1] || selectedBook?.name}
+                          data-book-name-reg={selectedBook?.name}
                           data-chapter={selectedChapter}
                           data-verse={v.verseNumber}
                           className="group flex items-start gap-4 p-4 border-2 border-primary bg-surface-white transition-all duration-100 ease-out md:hover:shadow-[6px_6px_0px_0px_#1A1A1A] md:hover:translate-x-[-2px] md:hover:translate-y-[-2px]"
@@ -551,14 +592,14 @@ export default function App() {
                           <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-8 transition-none script-container-lock">
                             {/* DYNAMIC LAYOUT CONTROL RENDERING */}
                             {(viewMode === 'parallel' || viewMode === 'single_english') && (
-                              <div className={`transition-none ${viewMode === 'parallel' ? 'lg:col-span-1' : 'lg:col-span-2'}`}>
+                              <div data-language="ENGLISH" className={`transition-none ${viewMode === 'parallel' ? 'lg:col-span-1' : 'lg:col-span-2'}`}>
                                 <p className="text-primary leading-relaxed font-medium" style={{ fontSize: `calc(1.15rem * ${settings.fontScale})` }}>
                                   {v.translations?.KJV || <span className="text-primary/50 italic">Text Unavailable</span>}
                                 </p>
                               </div>
                             )}
                             {(viewMode === 'parallel' || viewMode === 'single_regional') && (
-                              <div className={`transition-none ${viewMode === 'parallel' ? 'lg:col-span-1 border-t-4 border-primary pt-6 lg:border-t-0 lg:border-l-4 lg:pt-0 lg:pl-8' : 'lg:col-span-2'}`}>
+                              <div data-language="REGIONAL" className={`transition-none ${viewMode === 'parallel' ? 'lg:col-span-1 border-t-4 border-primary pt-6 lg:border-t-0 lg:border-l-4 lg:pt-0 lg:pl-8' : 'lg:col-span-2'}`}>
                                 <p className="text-primary font-sans font-semibold" style={{ fontSize: `calc(1.4rem * ${settings.fontScale * 0.9})`, lineHeight: 1.8 }}>
                                   {v.translations?.[selectedLanguage] || <span className="text-primary/50 italic">Text Unavailable</span>}
                                 </p>
