@@ -655,13 +655,7 @@ export default function App() {
 
                   {/* SCROLLABLE TEXT WRAPPER */}
                   <div className="p-3 md:p-10 flex-1 overflow-y-auto space-y-4 md:space-y-6 bg-surface-white">
-                    {loading ? (
-                      <div className="flex flex-col items-center justify-center py-20 gap-4">
-                        <div className="animate-spin rounded-none h-10 w-10 border-4 border-primary border-t-accent-red" />
-                        <p className="text-lg text-primary font-bold uppercase tracking-widest">Rendering...</p>
-                      </div>
-                    ) : (
-                      chapterVerses.map((v) => (
+                    {chapterVerses.map((v) => (
                         <div 
                           key={v._id} 
                           id={`verse-${v.verseNumber}`} 
