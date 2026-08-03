@@ -1,7 +1,46 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { BookOpen, Search, Menu, ChevronRight, BookOpenCheck, Globe, HelpCircle, Settings, X, Type, ChevronDown } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api/bible';
+import SearchWorker from './workers/search.worker.js?worker';
+
+const searchWorker = new SearchWorker();
+let messageIdCounter = 0;
+const workerPromises = {};
+
+searchWorker.addEventListener('message', (e) => {
+  const { type, id, error } = e.data;
+  if (workerPromises[id]) {
+    if (type === 'ERROR') {
+      workerPromises[id].reject(new Error(error));
+    } else {
+      workerPromises[id].resolve(e.data);
+    }
+    delete workerPromises[id];
+  }
+});
+
+const sendWorkerMessage = (type, payload) => {
+  return new Promise((resolve, reject) => {
+    const id = ++messageIdCounter;
+    workerPromises[id] = { resolve, reject };
+    searchWorker.postMessage({ type, payload, id });
+  });
+};
+
+const LANG_FILE_MAP = {
+  ENGLISH: 'english',
+  KJV: 'english',
+  TELUGU: 'telugu',
+  HINDI: 'hindi'
+};
+
+const GENESIS_1_FALLBACK = [
+  { _id: 'fallback_1_1_1', bookNumber: 1, chapterNumber: 1, verseNumber: 1, translations: { KJV: 'In the beginning God created the heaven and the earth.', TELUGU: 'ఆదియందు దేవుడు భూమ్యాకాశములను సృజించెను.', HINDI: 'आदि में परमेश्वर ने आकाश और पृथ्वी की सृष्टि की।' } },
+  { _id: 'fallback_1_1_2', bookNumber: 1, chapterNumber: 1, verseNumber: 2, translations: { KJV: 'And the earth was without form, and void; and darkness was upon the face of the deep. And the Spirit of God moved upon the face of the waters.', TELUGU: 'భూమి నిరాకారముగాను శూన్యముగాను ఉండెను; చీకటి అగాధ జలముమీద కమ్మియుండెను; దేవుని ఆత్మ జలములమీద అల్లాడుచుండెను.', HINDI: 'और पृथ्वी बेडौल और सूनी पड़ी थी, और गहरे जल के ऊपर अन्धियारा था: तथा परमेश्वर का आत्मा जल के ऊपर मण्डलाता था।' } },
+  { _id: 'fallback_1_1_3', bookNumber: 1, chapterNumber: 1, verseNumber: 3, translations: { KJV: 'And God said, Let there be light: and there was light.', TELUGU: 'దేవుడు వెలుగు కమ్మని పలుకగా వెలుగు కలిగెను.', HINDI: 'तब परमेश्वर ने कहा, उजियाला हो: तो उजियाला हो गया।' } },
+  { _id: 'fallback_1_1_4', bookNumber: 1, chapterNumber: 1, verseNumber: 4, translations: { KJV: 'And God saw the light, that it was good: and God divided the light from the darkness.', TELUGU: 'వెలుగు మంచిదైనట్టు దేవుడు చూచెను; దేవుడు చీకటిని వెలుగును వేరుపరచెను.', HINDI: 'और परमेश्वर ने उजियाले को देखा कि अच्छा है; और परमेश्वर ने उजियाले को अन्धियारे से अलग किया।' } },
+  { _id: 'fallback_1_1_5', bookNumber: 1, chapterNumber: 1, verseNumber: 5, translations: { KJV: 'And God called the light Day, and the darkness he called Night. And the evening and the morning were the first day.', TELUGU: 'దేవుడు వెలుగునకు పగలనియు, చీకటికి రాత్రి అనియు పేరు పెట్టెను. అస్తమయమును ఉదయమును కలుగగా ఒక దినమాయెను.', HINDI: 'और परमेश्वर ने उजियाले को दिन और अन्धियारे को रात कहा। तथा सांझ हुई फिर भोर हुआ। इस प्रकार पहिला दिन हो गया।' } }
+];
 
 const ENGLISH_BOOK_NAMES = [
   "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua", "Judges", "Ruth",
@@ -97,9 +136,9 @@ export default function App() {
     }
   };
   
-  // Content Display States
+  // Content Display & Cache States
+  const [loadedBibles, setLoadedBibles] = useState({});
   const [chapterVerses, setChapterVerses] = useState([]);
-  const [loading, setLoading] = useState(false);
   
   // Advanced Search Engine States
   const [searchQuery, setSearchQuery] = useState('');
@@ -197,40 +236,84 @@ export default function App() {
     localStorage.setItem('bible_settings', JSON.stringify(settings));
   }, [settings]);
 
-  // Phase 1: Load Cached Navigation Structure on Mount & Language Change
+  // Phase 1: Load Single Language JSON Manifests on Demand
   useEffect(() => {
-    fetch(`${API_BASE}/navigation-menu?lang=${selectedLanguage}`)
-      .then(res => res.json())
-      .then(payload => {
-        if (payload.status === 'success' && payload.data.length > 0) {
-          setMenuData(payload.data);
-          setSelectedBook(prev => {
-            if (!prev) return payload.data[0];
-            return payload.data.find(b => b.bookNumber === prev.bookNumber) || payload.data[0];
-          });
-        }
-      })
-      .catch(err => console.error("Failed to load navigation cache:", err));
+    const baseUrl = import.meta.env.BASE_URL;
+    const activeFile = LANG_FILE_MAP[selectedLanguage] || 'english';
+
+    const loadLang = (fileKey) => {
+      if (loadedBibles[fileKey]) return Promise.resolve(loadedBibles[fileKey]);
+      return fetch(`${baseUrl}data/bible/${fileKey}.json`)
+        .then(res => res.json())
+        .then(data => {
+          setLoadedBibles(prev => ({ ...prev, [fileKey]: data }));
+          return data;
+        });
+    };
+
+    Promise.all([
+      loadLang(activeFile),
+      loadLang('english')
+    ]).then(([activeData]) => {
+      if (activeData && activeData.books) {
+        setMenuData(activeData.books);
+        setSelectedBook(prev => {
+          if (!prev) return activeData.books[0];
+          return activeData.books.find(b => b.bookNumber === prev.bookNumber) || activeData.books[0];
+        });
+      }
+    }).catch(err => console.error("Failed to load language JSON:", err));
+
+    sendWorkerMessage('LOAD_INDEX', { lang: activeFile, baseUrl }).catch(console.error);
+    sendWorkerMessage('LOAD_INDEX', { lang: 'english', baseUrl }).catch(console.error);
   }, [selectedLanguage]);
 
-  // Phase 2: Fetch Chapter Contents Natively When Selection Changes
+  // Phase 2: Instant Reader State Mapping from Cached Memory
   useEffect(() => {
     if (!selectedBook) return;
     
-    setLoading(true);
-    fetch(`${API_BASE}/chapter/${selectedBook.bookNumber}/${selectedChapter}`)
-      .then(res => res.json())
-      .then(payload => {
-        if (payload.status === 'success') {
-          setChapterVerses(payload.data);
+    if (selectedBook.bookNumber === 1 && selectedChapter === 1 && chapterVerses.length === 0) {
+       setChapterVerses(GENESIS_1_FALLBACK);
+    }
+
+    const activeFile = LANG_FILE_MAP[selectedLanguage] || 'english';
+    const englishData = loadedBibles['english'];
+    const activeData = loadedBibles[activeFile];
+
+    if (!englishData && !activeData) return;
+
+    const targetBookNumber = selectedBook.bookNumber;
+
+    const kjvBook = englishData?.books?.find(b => b.bookNumber === targetBookNumber);
+    const kjvChap = kjvBook?.chapters?.find(c => c.chapter === selectedChapter);
+
+    const regBook = activeData?.books?.find(b => b.bookNumber === targetBookNumber);
+    const regChap = regBook?.chapters?.find(c => c.chapter === selectedChapter);
+
+    const kjvVerses = kjvChap?.verses || [];
+    const regVerses = regChap?.verses || [];
+
+    const maxVerseCount = Math.max(kjvVerses.length, regVerses.length);
+    const zipped = [];
+
+    for (let i = 1; i <= maxVerseCount; i++) {
+      const kV = kjvVerses.find(v => v.number === i);
+      const rV = regVerses.find(v => v.number === i);
+
+      zipped.push({
+        _id: `cached_${targetBookNumber}_${selectedChapter}_${i}`,
+        bookNumber: targetBookNumber,
+        chapterNumber: selectedChapter,
+        verseNumber: i,
+        translations: {
+          KJV: kV ? kV.text : 'Text Unavailable',
+          [selectedLanguage]: rV ? rV.text : 'Text Unavailable'
         }
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Failed to load chapter verses:", err);
-        setLoading(false);
       });
-  }, [selectedBook, selectedChapter]);
+    }
+
+    setChapterVerses(zipped);
+  }, [selectedBook, selectedChapter, selectedLanguage, loadedBibles]);
 
   // Phase 3: Execute Target Search Form Logic
   const performSearch = useCallback((query, translation) => {
@@ -239,14 +322,16 @@ export default function App() {
       return;
     }
     setSearching(true);
-    let url = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
-    if (translation) url += `&translation=${translation}`;
-
-    fetch(url)
-      .then(res => res.json())
-      .then(payload => {
-        if (payload.status === 'success') {
-          setSearchResults(payload.data);
+    
+    const baseUrl = import.meta.env.BASE_URL;
+    const rawLang = translation || selectedLanguage;
+    const targetFile = LANG_FILE_MAP[rawLang] || 'english';
+    
+    sendWorkerMessage('LOAD_INDEX', { lang: targetFile, baseUrl })
+      .then(() => sendWorkerMessage('SEARCH', { query, translation: targetFile, baseUrl }))
+      .then(response => {
+        if (response.type === 'SEARCH_RESULTS') {
+          setSearchResults(response.results);
         }
         setSearching(false);
       })
@@ -254,7 +339,7 @@ export default function App() {
         console.error("Search execution error:", err);
         setSearching(false);
       });
-  }, []);
+  }, [selectedLanguage]);
 
   const handleSearch = (e) => {
     if (e) e.preventDefault();

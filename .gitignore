@@ -1,39 +1,52 @@
-# Global OS & Editor files
+# ============================================================
+# Bible Web App — .gitignore
+# Static JSON Architecture (No Server / No Database Runtime)
+# ============================================================
+
+# ---- Dependencies ----
+node_modules/
+client/node_modules/
+
+# ---- Build Outputs ----
+client/dist/
+client/build/
+
+# ---- Environment Variables ----
+.env
+.env.local
+.env.*.local
+client/.env
+client/.env.local
+
+# ---- SQLite Temp Files (keep *.db as source of truth for scripts/) ----
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ---- OS & System Metadata ----
 .DS_Store
 Thumbs.db
+ehthumbs.db
+
+# ---- Editor & IDE Config ----
 .vscode/
 .idea/
 *.suo
 *.sln
 *.sw?
+*.swp
 
-# Node modules
-node_modules/
-client/node_modules/
-server/node_modules/
-
-# Logs
+# ---- Logs ----
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Environment Variables (CRITICAL: Do not upload API keys or secrets!)
-.env
-server/.env
-client/.env
-client/.env.local
-
-# Build output
-client/dist/
-
-# NOTE: The /server/data/ folder contains the verse.csv and kjv_en.db
-# We DO NOT ignore them here because they are small enough (< 15MB) 
-# and are required for the Mock Mode API to function when cloned.
-
-# SQLite Temp Files
-*.db-journal
-*.db-wal
-
-# AI / Dev Tooling (local only — do not upload)
+# ---- AI / Dev Tooling (local only) ----
 .agents/
 graphify-out/
-debug_verses.js
+
+# ---- One-time scripts no longer needed after JSON generation ----
+# (Intentionally NOT ignoring scripts/convert-db-to-json.js — it stays for future
+#  new translation additions. Remove this comment if you choose to also ignore it.)
